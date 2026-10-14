@@ -1,0 +1,74 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>FloodResQ</title>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
+<style>*{box-sizing:border-box}body{margin:0;font:14px system-ui,sans-serif;background:#f3f4f6;color:#111827}header{background:#1e3a8a;color:#fff;padding:10px 14px;display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+header b{font-size:18px;flex:1}button,select,input,textarea{font:inherit;padding:7px 10px;border-radius:6px;border:1px solid #d1d5db}button{background:#1e3a8a;color:#fff;border:0;cursor:pointer}
+.sos{background:#dc2626;font-weight:700}.bad{background:#b91c1c}.ok{background:#15803d}main{display:grid;grid-template-columns:1fr 380px;height:calc(100vh - 54px)}#map{height:100%}
+aside{overflow:auto;padding:10px;background:#f3f4f6}.card{background:#fff;border-radius:8px;padding:10px;margin-bottom:8px;border-left:5px solid #9ca3af}.Critical{border-color:#dc2626}.High{border-color:#f97316}.Moderate{border-color:#eab308}.Low{border-color:#22c55e}
+.row{display:flex;gap:6px;flex-wrap:wrap;margin-top:6px}form{display:grid;gap:6px}#auth{max-width:340px;margin:60px auto;background:#fff;padding:20px;border-radius:10px}.stat{display:inline-block;background:#fff;padding:6px 10px;margin:0 4px 6px 0;border-radius:6px}
+.tag{font-size:12px;background:#e5e7eb;border-radius:10px;padding:1px 8px}#toast{position:fixed;bottom:14px;left:50%;transform:translateX(-50%);background:#111827;color:#fff;padding:10px 16px;border-radius:8px;display:none;z-index:9999}
+@media(max-width:800px){main{grid-template-columns:1fr;grid-template-rows:45vh 1fr}}</style></head><body>
+<div id="auth" style="display:none"><h2>FloodResQ</h2><p>Real-time flood response. One connected platform.</p><form id="af"><input name="name" placeholder="Name (register only)"><input name="email" type="email" placeholder="Email" required>
+<input name="password" type="password" placeholder="Password" required><select name="role"><option value="citizen">Citizen</option><option value="volunteer">Volunteer</option><option value="ngo">NGO</option></select>
+<button data-m="login">Log in</button><button type="button" data-m="register" id="reg">Register</button><small id="aerr" style="color:#b91c1c"></small></form></div>
+<div id="app" style="display:none"><header><b>🌊 FloodResQ <span class="tag" id="role"></span></b><span id="stats"></span><button class="sos" id="sosb">🆘 SOS</button><button id="out">Logout</button></header>
+<main><div id="map"></div><aside><div id="panel"></div><h3>Live incidents</h3><div id="feed"></div><div id="mis"></div></aside></main></div><div id="toast"></div>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script><script src="/socket.io/socket.io.js"></script>
+<script>
+const $=s=>document.querySelector(s);let U=JSON.parse(localStorage.u||'null'),T=localStorage.t,inc=[],mis=[],vols=[],pick=null,map,layer,pm;const isA=()=>['authority','admin'].includes(U.role),isF=()=>['volunteer','ngo'].includes(U.role);
+const api=async(p,o={})=>{const r=await fetch('/api'+p,{...o,headers:{...(o.body&&!(o.body instanceof FormData)?{'Content-Type':'application/json'}:{}),Authorization:'Bearer '+T}});const d=await r.json().catch(()=>({}));if(r.status===401&&T)return out();if(!r.ok)throw new Error(d.error||'Request failed');return d};
+const toast=t=>{const e=$('#toast');e.textContent=t;e.style.display='block';setTimeout(()=>e.style.display='none',3500)};const out=()=>{localStorage.clear();location.reload()};
+const col={Critical:'#dc2626',High:'#f97316',Moderate:'#eab308',Low:'#22c55e'};
+async function login(mode){const f=new FormData($('#af'));const b=Object.fromEntries(f);try{const d=await api('/auth/'+mode,{method:'POST',body:JSON.stringify(b)});localStorage.t=d.token;localStorage.u=JSON.stringify(d.user);location.reload()}catch(e){$('#aerr').textContent=e.message}}
+document.querySelectorAll('#af button').forEach(b=>b.onclick=e=>{e.preventDefault();login(b.dataset.m)});$('#out').onclick=out;
+async function load(){try{inc=await api('/incidents');mis=await api('/missions');if(isA()){vols=await api('/volunteers');const s=await api('/stats');$('#stats').innerHTML=`<span class=stat>Active ${s.active}</span><span class=stat>Critical ${s.critical}</span><span class=stat>Need rescue ${s.peopleNeedingRescue}</span><span class=stat>Resolved ${s.resolved}</span>`}draw()}catch(e){toast(e.message)}}
+const btn=(t,fn,c='')=>`<button class="${c}" onclick="${fn}">${t}</button>`;
+function draw(){layer.clearLayers();$('#feed').innerHTML=inc.length?inc.map(i=>{L.circleMarker([i.location.lat,i.location.lng],{radius:10,color:col[i.priorityLabel],fillOpacity:.7}).addTo(layer).bindPopup(`<b>${i.type}</b><br>${i.priorityLabel} (${i.priorityScore})<br>${i.address||''}<br>Status: ${i.status}`);
+const ms=mis.find(m=>m.incident&&m.incident._id===i._id&&m.status!=='cancelled');
+return `<div class="card ${i.priorityLabel}"><b>${i.priorityLabel.toUpperCase()} · ${i.type}</b> <span class=tag>${i.verification}</span> <span class=tag>${i.status}</span><br>${i.address||''} ${i.description||''}<br>
+👥 ${i.peopleAffected} affected · 🆘 ${i.peopleNeedingRescue} need rescue · score ${i.priorityScore}${i.dupCount?` · <b>Possible duplicate reports: ${i.dupCount}</b>`:''}${i.images.map(x=>`<br><img src="${x}" width=120>`).join('')}
+${isA()?`<div class=row>${i.verification!=='verified'?btn('Verify',`act('${i._id}','verify')`,'ok'):''}${btn('Reject',`act('${i._id}','reject')`,'bad')}${i.status==='open'&&i.verification==='verified'?`<select id="v${i._id}">${vols.map(v=>`<option value=${v._id}>${v.name}</option>`)}</select>${btn('Assign boat team',`assign('${i._id}')`)}`:''}</div>`:''}</div>`}).join(''):'<p>No incidents. 🎉</p>';
+$('#mis').innerHTML=(isF()||isA())&&mis.length?'<h3>Missions</h3>'+mis.map(m=>`<div class=card><b>${m.code}</b> ${m.incident?.type||''} — <span class=tag>${m.status}</span> ${m.team?.name||''}<div class=row>${isF()&&m.status==='assigned'?btn('Accept → En route',`ms('${m._id}','en_route')`):''}${isF()&&m.status==='en_route'?btn('Start rescue',`ms('${m._id}','in_progress')`):''}${isF()&&m.status==='in_progress'?btn('Complete',`ms('${m._id}','completed')`,'ok'):''}</div></div>`).join(''):''}
+window.act=async(id,a)=>{try{await api(`/incidents/${id}/${a}`,{method:'POST'});load()}catch(e){toast(e.message)}};
+window.assign=async id=>{try{await api('/missions',{method:'POST',body:JSON.stringify({incident:id,team:$('#v'+id).value,resources:['Boat']})});toast('Mission created');load()}catch(e){toast(e.message)}};
+window.ms=async(id,status)=>{try{await api('/missions/'+id,{method:'PUT',body:JSON.stringify({status})});load()}catch(e){toast(e.message)}};
+function reportForm(){$('#panel').innerHTML=`<div class=card><b>Report flood</b> (click the map to set location)<form id="rf"><select name="type">${['Waterlogging','Flash Flood','Road Blockage','Stranded People','Building Damage','Bridge Damage','Drainage Overflow','Fallen Tree','Power Hazard','Other'].map(t=>`<option>${t}</option>`)}</select>
+<select name="severity"><option value=low>Low</option><option value=moderate>Moderate</option><option value=high>High</option><option value=critical>Critical</option></select><input name="address" placeholder="Area / landmark"><input name="peopleAffected" type="number" min=0 placeholder="People affected"><input name="peopleNeedingRescue" type="number" min=0 placeholder="People needing rescue">
+<textarea name="description" placeholder="Description"></textarea><label><input type=checkbox name="roadBlocked" value=true> Road blocked</label><input type="file" name="images" accept="image/*" multiple><button>Submit report</button></form></div>`;
+$('#rf').onsubmit=async e=>{e.preventDefault();if(!pick)return toast('Click the map to choose a location');const f=new FormData(e.target);f.set('lat',pick.lat);f.set('lng',pick.lng);f.set('roadBlocked',!!f.get('roadBlocked'));
+try{const r=await api('/incidents',{method:'POST',body:f});toast(r.duplicateOf?'Possible duplicate – merged for authority review':'Report submitted: '+r.incident.priorityLabel);e.target.reset();load()}catch(x){toast(x.message)}}}
+$('#sosb').onclick=async()=>{if(!pick)return toast('Click the map on your location first');const n=prompt('How many people need help?','1');if(!n)return;const f=new FormData();
+Object.entries({type:'Stranded People',severity:'critical',lat:pick.lat,lng:pick.lng,peopleNeedingRescue:n,peopleAffected:n,description:'SOS request',isSOS:true}).forEach(([k,v])=>f.set(k,v));
+try{await api('/incidents',{method:'POST',body:f});toast('SOS sent');load()}catch(e){toast(e.message)}};
+function start(){$('#app').style.display='block';$('#role').textContent=U.role;map=L.map('map').setView([28.367,79.43],13);L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png',{attribution:'© OpenStreetMap'}).addTo(map);layer=L.layerGroup().addTo(map);
+map.on('click',e=>{pick=e.latlng;pm?pm.setLatLng(pick):pm=L.marker(pick).addTo(map)});if(U.role==='citizen')reportForm();
+const so=io();['newIncident','incidentUpdated','incidentVerified','missionAssigned','missionUpdated'].forEach(ev=>so.on(ev,()=>{load();if(ev!=='incidentUpdated')toast('Update: '+ev)}));load()}
+if(U&&T)start();else $('#auth').style.display='block';
+</script>
+<script>
+let RES=[],SH=[],AN=null,AL=[];const _load=load;load=async function(){try{RES=await api('/resources');SH=await api('/shelters');AL=await api('/alerts');if(isA())AN=await api('/analytics')}catch(e){}return _load()};
+const _draw=draw;draw=function(){_draw();extra()};
+const bars=a=>(a||[]).map(x=>`<div>${x._id} <span style="display:inline-block;background:#1e3a8a;height:10px;width:${Math.min(x.n*18,160)}px"></span> ${x.n}</div>`).join('');
+function extra(){
+ if(!$('#xtra')){$('#panel').insertAdjacentHTML('afterend',`<div id=xtra>${isA()?`<div class=card><b>📢 Broadcast alert</b><form id=alf><input name=title placeholder="e.g. FLASH FLOOD WARNING" required><textarea name=message placeholder="Avoid... Nearest shelter..." required></textarea><button>Send alert</button></form></div>`:''}
+ ${isA()||isF()?`<div class=card><b>➕ Register resource</b> (uses map pin if set)<form id=rsf><input name=name placeholder="Name e.g. Boat 3" required><select name=type>${['Boat','Water pump','Ambulance','Rescue vehicle','Medical kit','Food packets','Drinking water'].map(t=>`<option>${t}</option>`)}</select><input name=quantity type=number min=1 placeholder="Quantity"><button>Add</button></form></div>`:''}<div id=dyn></div></div>`);
+  const post=(id,path,fn)=>{const f=$(id);if(f)f.onsubmit=async e=>{e.preventDefault();const b=Object.fromEntries(new FormData(f));if(pick){b.lat=pick.lat;b.lng=pick.lng}try{await api(path,{method:'POST',body:JSON.stringify(b)});f.reset();toast(fn);load()}catch(x){toast(x.message)}}};
+  post('#alf','/alerts','Alert broadcast');post('#rsf','/resources','Resource added')}
+ SH.forEach(s=>L.circleMarker([s.location.lat,s.location.lng],{radius:8,color:'#2563eb',fillOpacity:.9}).addTo(layer).bindPopup(`<b>🏠 ${s.name}</b><br>${s.address}<br>Space: ${s.capacity-s.occupied}/${s.capacity}<br>${s.facilities.join(', ')}<br>${s.contact}`));
+ RES.forEach(r=>L.circleMarker([r.location.lat,r.location.lng],{radius:6,color:'#7c3aed',fillOpacity:.9}).addTo(layer).bindPopup(`<b>${r.name}</b><br>${r.type} ×${r.quantity}<br>${r.status}`));
+ inc.filter(i=>i.status!=='resolved').forEach(i=>L.circle([i.location.lat,i.location.lng],{radius:500,stroke:false,fillColor:'#dc2626',fillOpacity:.1}).addTo(layer)); // overlapping circles = density heatmap
+ document.querySelectorAll('select[id^="v"]').forEach(s=>{const id=s.id.slice(1);if(!$('#r'+id))s.insertAdjacentHTML('afterend',`<select id="r${id}"><option value="">No resource</option>${RES.filter(r=>r.status==='available').map(r=>`<option value=${r._id}>${r.name}</option>`)}</select>`)});
+ $('#dyn').innerHTML=(AL.length?'<div class=card style="border-color:#f97316"><b>⚠️ Alerts</b>'+AL.map(a=>`<div><b>${a.title}</b><br>${a.message}</div>`).join('<hr>')+'</div>':'')
+ +(AN?`<div class=card><b>📊 Analytics</b><br>Avg rescue time: ${AN.avgRescueMinutes} min<br><u>By priority</u>${bars(AN.bySeverity)}<u>By type</u>${bars(AN.byType)}<u>Verification</u>${bars(AN.byVerification)}<u>Reports (7d)</u>${bars(AN.byDay)}</div>`:'')
+ +(isA()||isF()?`<div class=card><b>🛟 Resources</b>${RES.map(r=>`<div>${r.name} (${r.type}) <span class=tag>${r.status}</span></div>`).join('')}</div>`:'')}
+window.assign=async id=>{try{const r=$('#r'+id).value;await api('/missions',{method:'POST',body:JSON.stringify({incident:id,team:$('#v'+id).value,resources:r?['assigned']:[],resourceIds:r?[r]:[]})});toast('Mission created');load()}catch(e){toast(e.message)}};
+if(U&&T){const s2=io();s2.on('newAlert',a=>{toast('⚠️ '+a.title+': '+a.message);load()});s2.on('resourceUpdated',load);load()}
+function useMyLocation(){
+  if(!navigator.geolocation) return toast('Browser location support nahi karta');
+  navigator.geolocation.getCurrentPosition(p=>{
+    pick=L.latLng(p.coords.latitude,p.coords.longitude);
+    pm?pm.setLatLng(pick):pm=L.marker(pick).addTo(map);
+    map.setView(pick,15);
+    toast('Aapki location set ho gayi');
+  },()=>toast('Browser mein location permission Allow karo'),{enableHighAccuracy:true});
+}
+if(U&&T)$('#sosb').insertAdjacentHTML('beforebegin','<button onclick="useMyLocation()">📍 My location</button>');</script></body></html>
